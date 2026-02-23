@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 class Expense {
   final String id;
   String title;
@@ -25,15 +27,16 @@ class Expense {
     required this.category,
   });
 
-  // Create a copy of the expense with updated fields
+  // Create a copy with updated fields
   Expense copyWith({
+    String? id,
     String? title,
     double? amount,
     DateTime? date,
     String? category,
   }) {
     return Expense(
-      id: this.id,
+      id: id ?? this.id,
       title: title ?? this.title,
       amount: amount ?? this.amount,
       date: date ?? this.date,
@@ -41,25 +44,25 @@ class Expense {
     );
   }
 
-  // Convert Expense to Map for storage (if needed for future extensions)
-  Map<String, dynamic> toJson() {
+  // Convert Expense to Firestore document
+  Map<String, dynamic> toFirestore() {
     return {
-      'id': id,
       'title': title,
       'amount': amount,
-      'date': date.toIso8601String(),
+      'date': Timestamp.fromDate(date),
       'category': category,
     };
   }
 
-  // Create Expense from Map (if needed for future extensions)
-  factory Expense.fromJson(Map<String, dynamic> json) {
+  // Create Expense from Firestore document
+  factory Expense.fromFirestore(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
     return Expense(
-      id: json['id'],
-      title: json['title'],
-      amount: json['amount'],
-      date: DateTime.parse(json['date']),
-      category: json['category'],
+      id: doc.id,
+      title: data['title'] ?? '',
+      amount: (data['amount'] ?? 0).toDouble(),
+      date: (data['date'] as Timestamp).toDate(),
+      category: data['category'] ?? '',
     );
   }
 }

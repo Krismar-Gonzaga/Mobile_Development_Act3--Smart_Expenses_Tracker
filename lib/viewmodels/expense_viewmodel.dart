@@ -1,16 +1,36 @@
 import 'package:flutter/material.dart';
 import '../models/expense_model.dart';
 import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 class ExpenseViewModel extends ChangeNotifier {
   List<Expense> _expenses = [];
   String? _selectedCategory;
   DateTime? _selectedDate;
+  
+  // Firebase Firestore instance
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  
+  // Collection reference
+  late final CollectionReference<Map<String, dynamic>> _expensesCollection;
+  
+  // Loading state
+  bool _isLoading = false;
+  String? _error;
 
   // Getters
   List<Expense> get expenses => _expenses;
   String? get selectedCategory => _selectedCategory;
   DateTime? get selectedDate => _selectedDate;
+  bool get isLoading => _isLoading;
+  String? get error => _error;
+
+  // Constructor
+  ExpenseViewModel() {
+    _expensesCollection = _firestore.collection('expenses');
+    loadExpenses(); // Load expenses when ViewModel is created
+  }
 
   // Computed properties - total expenses calculation
   double get totalExpenses {
@@ -40,86 +60,144 @@ class ExpenseViewModel extends ChangeNotifier {
     return categoryTotals;
   }
 
-  // CRUD Operations with validation
+  // Load all expenses from Firebase
+  Future<void> loadExpenses() async {
+    _setLoading(true);
+    _clearError();
+    
+    try {
+      final querySnapshot = await _expensesCollection
+          .orderBy('date', descending: true)
+          .get();
+      
+      _expenses = querySnapshot.docs
+          .map((doc) => Expense.fromFirestore(doc))
+          .toList();
+      
+      notifyListeners();
+      print('Loaded ${_expenses.length} expenses from Firebase');
+    } catch (e) {
+      _setError('Failed to load expenses: ${e.toString()}');
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  // CRUD Operations with Firebase
 
   // Add new expense
-  bool addExpense({
+  Future<bool> addExpense({
     required String title,
     required double amount,
     required String category,
     DateTime? date,
-  }) {
-    // Validate title
-    if (title.trim().isEmpty) {
-      throw Exception('Title cannot be empty');
+  }) async {
+    // Validate inputs
+    try {
+      _validateExpenseInputs(title, amount, category);
+    } catch (e) {
+      _setError(e.toString());
+      return false;
     }
 
-    // Validate amount
-    if (amount <= 0) {
-      throw Exception('Amount must be greater than zero');
+    _setLoading(true);
+    _clearError();
+
+    try {
+      final newExpense = Expense(
+        id: '', // Will be set by Firebase
+        title: title.trim(),
+        amount: amount,
+        date: date ?? DateTime.now(),
+        category: category,
+      );
+
+      // Add to Firebase
+      final docRef = await _expensesCollection.add(newExpense.toFirestore());
+      
+      // Update local list with the generated ID
+      final addedExpense = newExpense.copyWith(id: docRef.id);
+      _expenses.insert(0, addedExpense); // Add at beginning for newest first
+      
+      notifyListeners();
+      print("Expenses Successfully Added: ${addedExpense.title} - ${addedExpense.amount}");
+      return true;
+    } catch (e) {
+      _setError('Failed to add expense: ${e.toString()}');
+      print("Expenses Not Successfully Added!: ${e.toString()}");
+      return false;
+    } finally {
+      _setLoading(false);
+      
     }
-
-    // Validate category
-    if (category.isEmpty) {
-      throw Exception('Please select a category');
-    }
-
-    final newExpense = Expense(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      title: title.trim(),
-      amount: amount,
-      date: date ?? DateTime.now(),
-      category: category,
-    );
-
-    _expenses.add(newExpense);
-    notifyListeners();
-    return true;
   }
 
   // Update existing expense
-  bool updateExpense({
+  Future<bool> updateExpense({
     required String id,
     required String title,
     required double amount,
     required String category,
     DateTime? date,
-  }) {
-    // Validate title
-    if (title.trim().isEmpty) {
-      throw Exception('Title cannot be empty');
+  }) async {
+    // Validate inputs
+    try {
+      _validateExpenseInputs(title, amount, category);
+    } catch (e) {
+      _setError(e.toString());
+      return false;
     }
 
-    // Validate amount
-    if (amount <= 0) {
-      throw Exception('Amount must be greater than zero');
+    _setLoading(true);
+    _clearError();
+
+    try {
+      final index = _expenses.indexWhere((e) => e.id == id);
+      if (index == -1) {
+        throw Exception('Expense not found');
+      }
+
+      final updatedExpense = _expenses[index].copyWith(
+        title: title.trim(),
+        amount: amount,
+        date: date ?? _expenses[index].date,
+        category: category,
+      );
+
+      // Update in Firebase
+      await _expensesCollection.doc(id).update(updatedExpense.toFirestore());
+      
+      // Update local list
+      _expenses[index] = updatedExpense;
+      
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _setError('Failed to update expense: ${e.toString()}');
+      return false;
+    } finally {
+      _setLoading(false);
     }
-
-    // Validate category
-    if (category.isEmpty) {
-      throw Exception('Please select a category');
-    }
-
-    final index = _expenses.indexWhere((e) => e.id == id);
-    if (index == -1) {
-      throw Exception('Expense not found');
-    }
-
-    _expenses[index] = _expenses[index].copyWith(
-      title: title.trim(),
-      amount: amount,
-      date: date ?? _expenses[index].date,
-      category: category,
-    );
-
-    notifyListeners();
-    return true;
   }
 
   // Delete expense
-  void deleteExpense(String id) {
-    _expenses.removeWhere((e) => e.id == id);
-    notifyListeners();
+  Future<void> deleteExpense(String id) async {
+    _setLoading(true);
+    _clearError();
+
+    try {
+      // Delete from Firebase
+      await _expensesCollection.doc(id).delete();
+      
+      // Remove from local list
+      _expenses.removeWhere((e) => e.id == id);
+      
+      notifyListeners();
+    } catch (e) {
+      _setError('Failed to delete expense: ${e.toString()}');
+    } finally {
+      _setLoading(false);
+    }
   }
 
   // Get expense by id
@@ -139,7 +217,6 @@ class ExpenseViewModel extends ChangeNotifier {
 
   void filterByDate(DateTime? date) {
     _selectedDate = date;
-    // Apply date filtering logic here if needed
     notifyListeners();
   }
 
@@ -182,5 +259,47 @@ class ExpenseViewModel extends ChangeNotifier {
       decimalDigits: 2,
     );
     return formatter.format(amount);
+  }
+
+  // Private helper methods
+
+  void _validateExpenseInputs(String title, double amount, String category) {
+    if (title.trim().isEmpty) {
+      throw Exception('Title cannot be empty');
+    }
+    if (amount <= 0) {
+      throw Exception('Amount must be greater than zero');
+    }
+    if (category.isEmpty) {
+      throw Exception('Please select a category');
+    }
+  }
+
+  void _setLoading(bool loading) {
+    _isLoading = loading;
+    notifyListeners();
+  }
+
+  void _setError(String errorMessage) {
+    _error = errorMessage;
+    notifyListeners();
+  }
+
+  void _clearError() {
+    _error = null;
+    notifyListeners();
+  }
+
+  // Real-time updates (optional)
+  void subscribeToExpenses() {
+    _expensesCollection
+        .orderBy('date', descending: true)
+        .snapshots()
+        .listen((snapshot) {
+      _expenses = snapshot.docs
+          .map((doc) => Expense.fromFirestore(doc))
+          .toList();
+      notifyListeners();
+    });
   }
 }
